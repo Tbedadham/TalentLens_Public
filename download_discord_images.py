@@ -3,6 +3,7 @@
 Script to download files (images and PDFs) from .webloc files in data/discord/links/
 """
 
+import hashlib
 import os
 import plistlib
 import urllib.request
@@ -63,6 +64,15 @@ def get_file_type(filename):
     return 'other'
 
 
+def hash_file(filepath):
+    """Compute SHA-256 hash of a file's contents"""
+    h = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def download_file(url, output_path):
     """Download file from URL to output path"""
     # Download with proper headers
@@ -99,13 +109,25 @@ def main():
 
     print(f"Found {len(webloc_files)} .webloc file(s)\n")
 
+    # Build hash index of already-downloaded files for content dedup
+    seen_hashes = {}  # hash -> filename
+    print("Building hash index of existing files...")
+    for d in [images_dir, pdfs_dir]:
+        for f in d.iterdir():
+            if f.is_file():
+                h = hash_file(f)
+                seen_hashes[h] = f.name
+    print(f"Indexed {len(seen_hashes)} existing file(s)\n")
+
     # Track statistics
     stats = {
         'total': len(webloc_files),
         'downloaded': 0,
-        'skipped': 0,
+        'skipped_filename': 0,
+        'skipped_duplicate': 0,
         'failed': 0
     }
+    duplicates = []  # list of (new_filename, existing_filename)
 
     # Process each .webloc file
     for idx, webloc_path in enumerate(webloc_files, 1):
@@ -135,11 +157,11 @@ def main():
 
             output_path = output_dir / filename
 
-            # Skip if already downloaded
+            # Skip if file with same name already downloaded
             if output_path.exists():
                 file_size = output_path.stat().st_size
                 print(f"⊙ Already exists ({file_size:,} bytes): {filename}")
-                stats['skipped'] += 1
+                stats['skipped_filename'] += 1
                 print()
                 continue
 
@@ -147,9 +169,19 @@ def main():
             print(f"↓ Downloading: {filename}")
             download_file(url, output_path)
 
-            file_size = output_path.stat().st_size
-            print(f"✓ Downloaded ({file_size:,} bytes): {filename}")
-            stats['downloaded'] += 1
+            # Check for content duplicate
+            file_hash = hash_file(output_path)
+            if file_hash in seen_hashes:
+                existing = seen_hashes[file_hash]
+                print(f"⊘ Duplicate content! Same as: {existing}")
+                duplicates.append((filename, existing))
+                output_path.unlink()  # remove the duplicate
+                stats['skipped_duplicate'] += 1
+            else:
+                file_size = output_path.stat().st_size
+                print(f"✓ Downloaded ({file_size:,} bytes): {filename}")
+                seen_hashes[file_hash] = filename
+                stats['downloaded'] += 1
 
         except Exception as e:
             print(f"✗ Error: {e}")
@@ -161,10 +193,17 @@ def main():
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"Total files:      {stats['total']}")
-    print(f"Downloaded:       {stats['downloaded']}")
-    print(f"Already existed:  {stats['skipped']}")
-    print(f"Failed:           {stats['failed']}")
+    print(f"Total files:        {stats['total']}")
+    print(f"Downloaded:         {stats['downloaded']}")
+    print(f"Already existed:    {stats['skipped_filename']}")
+    print(f"Content duplicates: {stats['skipped_duplicate']}")
+    print(f"Failed:             {stats['failed']}")
+
+    if duplicates:
+        print(f"\nDuplicate files removed:")
+        for new_name, existing_name in duplicates:
+            print(f"  {new_name} == {existing_name}")
+
     print(f"\nFiles saved to:")
     print(f"  Images: {images_dir}")
     print(f"  PDFs:   {pdfs_dir}")
