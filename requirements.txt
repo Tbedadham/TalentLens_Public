@@ -18,6 +18,9 @@ faiss-cpu
 fastapi
 pydantic
 
+# Streamlit UI (streamlit/)
+streamlit
+
 # Reddit scraping (data/reddit/data.ipynb)
 requests
 
